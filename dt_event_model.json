@@ -1,0 +1,9 @@
+{
+	"CompName" : "string",		// Kubevela Component Name
+	"ReplicaID": "string", 		// Unique ID per Component Replica
+	"EventType": "in",			// Type of Event, e.g. in / out / ack
+	"EventTime": 123456789, 	// Timestamp in ms
+	"PayloadSize": 123,			// Size of Message Payload in bytes
+	"ActivityID": "string",		// end-to-end consistent ID for the flow call
+	"RemoteCompName": "string"	// Kubevela Component Name of the Source/Sink Component for the Event 
+}
