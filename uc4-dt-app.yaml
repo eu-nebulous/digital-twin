@@ -1,0 +1,100 @@
+apiVersion: core.oam.dev/v1beta1
+kind: Application
+metadata:
+  name: nbls-fire
+spec:
+  components:
+    - name: postgis-db
+      type: webservice
+      dependsOn:
+        - postgis-pvc
+      properties:
+        image: postgis/postgis:latest
+        exposeType: NodePort
+        ports:
+          - name: postgres-api
+            expose: true
+            port: 5432
+            nodePort: 31032
+            protocol: TCP
+        env:
+          - name: POSTGRES_USER
+            value: "postgres"
+          - name: POSTGRES_PASSWORD
+            value: "admin"
+        labels:
+          app: postgis-db
+    - name: mqtt-app
+      type: webservice
+      properties:
+        image: reg.biba.uni-bremen.de/nebulous/nbls-fire-mosquitto:latest
+        imagePullSecrets: ["regcred"]
+        exposeType: NodePort
+        ports:
+          - name: mqtt-api
+            expose: true
+            port: 1883
+            nodePort: 31083
+            protocol: TCP
+        labels:
+          app: mqtt-app 
+    - name: dt-broker
+      type: webservice
+      properties:
+        image: reg.biba.uni-bremen.de/nebulous/nbls-fire-mosquitto:latest
+        imagePullSecrets: ["regcred"]
+        exposeType: NodePort
+        ports:
+          - name: dt-broker-api
+            expose: true
+            port: 1883
+            nodePort: 31084
+            protocol: TCP
+        labels:
+          app: dt-broker 
+    - name: persist-app
+      type: webservice
+      dependsOn:
+        - postgis-db
+        - mqtt-app
+        - map-app
+      properties:
+        image: reg.biba.uni-bremen.de/nebulous/persist-dt:latest
+        imagePullSecrets: ["regcred"]
+        env:
+          - name: DB_HOST
+            value: "postgis-db"
+          - name: DB_USER
+            value: "postgres"
+          - name: DB_PASSWORD
+            value: "admin"
+          - name: DB_DATABASE
+            value: "nebulous"
+          - name: DB_PORT
+            value: "5432"
+          - name: MQTT_HOST
+            value: "mqtt-app"
+          - name: MQTT_PORT
+            value: "1883"
+          - name: MQTT_USERNAME
+            value: "persist"
+          - name: MQTT_PASSWORD
+            value: "password"
+          - name: DT_MQTT_HOST
+            value: "dt-broker"
+          - name: DT_MQTT_PORT
+            value: "1883"
+          - name: DT_MQTT_USERNAME
+            value: "persist"
+          - name: DT_MQTT_PASSWORD
+            value: "password"
+        labels:
+          app: persist-app 
+        traits:
+        - type: "scaler"
+          properties:
+            replicas: 2
+        - type: "resource"
+          properties:
+            cpu: 1
+            memory: 2Gi
