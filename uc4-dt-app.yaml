@@ -6,8 +6,6 @@ spec:
   components:
     - name: postgis-db
       type: webservice
-      dependsOn:
-        - postgis-pvc
       properties:
         image: postgis/postgis:latest
         exposeType: NodePort
@@ -57,7 +55,7 @@ spec:
       dependsOn:
         - postgis-db
         - mqtt-app
-        - map-app
+        - dt-broker
       properties:
         image: reg.biba.uni-bremen.de/nebulous/persist-dt:latest
         imagePullSecrets: ["regcred"]
@@ -88,8 +86,6 @@ spec:
             value: "persist"
           - name: DT_MQTT_PASSWORD
             value: "password"
-        labels:
-          app: persist-app 
         traits:
         - type: "scaler"
           properties:
