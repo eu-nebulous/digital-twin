@@ -48,21 +48,14 @@ def process_file(tracefile, dbfile):
         except json.JSONDecodeError:
             print(f"Invalid JSON in log line {line_number}")
     cur.execute("""
-    CREATE TABLE IF NOT EXISTS components(
-      name STRING,
-      replica_id STRING,
-      cores INTEGER DEFAULT 0
-    )
+    CREATE VIEW IF NOT EXISTS components(name, replica_id, cores) AS
+    SELECT DISTINCT local_name, local_id, 0
+      FROM trace_events
+     UNION
+    SELECT DISTINCT remote_name, '', 0
+      FROM trace_events
+     WHERE remote_name NOT IN (SELECT local_name FROM trace_events)
     """)
-    cur.execute("DELETE FROM components")
-    cur.execute("""
-      INSERT INTO components (name, replica_id)
-      SELECT DISTINCT local_name, local_id
-        FROM trace_events
-       UNION
-      SELECT DISTINCT remote_name, ''
-        FROM trace_events
-       WHERE remote_name NOT IN (SELECT local_name FROM trace_events)""")
     con.commit()
 
 
