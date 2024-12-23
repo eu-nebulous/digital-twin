@@ -1,0 +1,215 @@
+module Twin;
+import * from ABS.DC;
+
+// Database-related types
+
+data DBNode = DBNode(String nodeName, String nodeId, Int nodeCores);
+
+def List<Int> minEventTime__() =
+    builtin(sqlite3, "../logextractor/trace.db", "SELECT min(event_time) FROM trace_events");
+
+def Int minEventTime() = head(minEventTime__());
+
+// All components (nodes).  Note that remote-only nodes, e.g. a
+// database, have an empty string as id.
+def List<DBNode> allNodes() =
+    builtin(sqlite3, "../logextractor/trace.db",
+            `SELECT * FROM components`);
+
+// all activity IDs
+def List<String> activities() =
+    builtin(sqlite3, "../logextractor/trace.db",
+            "SELECT DISTINCT activity_id FROM trace_events");
+
+data Event = Event(String eventLocalComponent, String eventLocalId,
+                   String eventRemoteComponent,
+                   String eventActivityId, String eventType,
+                   Int eventTime, Int eventPayloadSize);
+
+def String eventJsonl(Event event, Int minTime) =
+    // Generate a jsonl line with the event, but use now() + minTime
+    // instead of the "ground truth" of the trace.  We pass in minTime
+    // so that we don't have to call `minEventTime()` every time.
+    `{"CompName":"$eventLocalComponent(event)$","ReplicaID":"$eventLocalId(event)$","EventType":"$eventType(event)$","EventTime":$timeValue(now()) + minTime$,"PayloadSize":$eventPayloadSize(event)$,"ActivityID":"$eventActivityId(event)$","RemoteCompName":"$eventRemoteComponent(event)$"}`;
+
+// All trace events of given activity, ordered by time
+def List<Event> activityTrace(String activityId) =
+    builtin(sqlite3, "../logextractor/trace.db",
+            `SELECT * FROM trace_events
+             WHERE activity_id = ?
+             ORDER BY event_time ASC`,
+            activityId);
+
+def List<Event> startingEvents(String activityId) =
+    builtin(sqlite3, "../logextractor/trace.db",
+            `SELECT local_name, local_id, remote_name, activity_id, event_type, event_time, payload_size
+               FROM trace_events a
+              WHERE activity_id = ?
+                AND event_type = 'out'
+                AND NOT EXISTS
+                    (SELECT * FROM trace_events b
+                      WHERE b.activity_id = a.activity_id
+                        AND ((b.event_type = 'in' OR b.event_type = 'ack')
+                             AND b.local_name = a.local_name
+                             AND b.local_id = a.local_id)
+                        AND b.event_time < a.event_time)`,
+            activityId);
+
+def List<Event> outgoingEventsForIncoming(Event in_event) =
+    builtin(sqlite3, "../logextractor/trace.db",
+            `WITH
+               activity_id AS (SELECT ?),
+               local_event_name AS (SELECT ?),
+               local_event_id AS (SELECT ?),
+               local_event_time AS (SELECT ?),
+               remote_event_name AS (SELECT ?),
+               upper_time_bound AS (
+                 SELECT MIN(event_time)
+                   FROM trace_events
+                  WHERE activity_id = (SELECT * FROM activity_id)
+                    AND local_name = (SELECT * FROM local_event_name)
+                    AND local_id = (SELECT * FROM local_event_id)
+                    AND (event_type = 'in' OR event_type = 'ack')
+                    AND event_time > (SELECT * FROM local_event_time))
+             SELECT local_name, local_id, remote_name, activity_id, event_type, event_time, payload_size
+               FROM trace_events
+              WHERE activity_id = (SELECT * FROM activity_id)
+                AND (event_type = 'out'
+                     AND local_name = (SELECT * FROM local_event_name)
+                     AND local_id = (SELECT * FROM local_event_id))
+                AND event_time > (SELECT * FROM local_event_time)
+                AND event_time < COALESCE((SELECT * FROM upper_time_bound), event_time + 1)`,
+            eventActivityId(in_event),
+            eventLocalComponent(in_event),
+            eventLocalId(in_event),
+            eventTime(in_event),
+            eventRemoteComponent(in_event));
+
+// For an 'out' (leaves a component) trace event, find the
+// corresponding 'in' or 'ack' event.  The return value should always
+// contain one event.
+def List<Event> incomingEventForOutgoing(Event out_event) =
+    builtin(sqlite3, "../logextractor/trace.db",
+            // Lots of superfluous WITH subqueries; we could pass in
+            // some of the arguments multiple times but this is a bit
+            // more readable
+            `WITH
+               activity_id AS (SELECT ?),
+               local_event_name AS (SELECT ?),
+               local_event_id AS (SELECT ?),
+               local_event_time AS (SELECT ?),
+               remote_event_name AS (SELECT ?),
+               upper_time_bound AS (
+                 SELECT MIN(event_time)
+                   FROM trace_events
+                  WHERE activity_id = (SELECT * FROM activity_id)
+                    AND local_name = (SELECT * FROM local_event_name)
+                    AND local_id = (SELECT * FROM local_event_id)
+                    AND event_type = 'out'
+                    AND event_time > (SELECT * FROM local_event_time))
+             SELECT local_name, local_id, remote_name, activity_id, event_type, event_time, payload_size
+               FROM trace_events
+              WHERE activity_id = (SELECT * FROM activity_id)
+                AND (event_type = 'in'
+                     AND local_name = (SELECT * FROM remote_event_name)
+                     AND remote_name = (SELECT * FROM local_event_name)
+                     OR event_type = 'ack'
+                     AND local_name = (SELECT * FROM local_event_name)
+                     AND remote_name = (SELECT * FROM remote_event_name))
+                AND event_time > (SELECT * FROM local_event_time)
+                AND event_time < COALESCE((SELECT * FROM upper_time_bound), event_time + 1)`,
+            eventActivityId(out_event),
+            eventLocalComponent(out_event),
+            eventLocalId(out_event),
+            eventTime(out_event),
+            eventRemoteComponent(out_event));
+
+// Model nodes
+
+interface Component {
+    Unit execute(Int cost);
+}
+class Component(String name, String id, Int nCores) implements Component {
+    Unit execute(Int cost) {
+        [Cost: cost] skip;
+    }
+}
+
+interface Activity {
+}
+
+class Activity(String activityId, Map<Pair<String, String>, Component> components)
+    implements Activity
+{
+    Int minEventTime = minEventTime();
+    Int eventsInFlight = 0;     // If 0, activity has finished / hasn't started yet
+
+    Unit run() {
+        List<Event> pendingEvents = startingEvents(activityId);
+        foreach (event in startingEvents(activityId)) {
+            this!processEvent(event, eventTime(event) - minEventTime);
+        }
+    }
+
+    Unit processEvent(Event event, Rat timeDelay) {
+        eventsInFlight = eventsInFlight + 1;
+        // TODO: try to eliminate delay -- for some events, we want to
+        // replace this with
+        await duration(timeDelay);
+        println(eventJsonl(event, minEventTime));
+        switch (eventType(event)) {
+            "out" => {
+                // should be only one event, since we don't broadcast(?)
+
+                // TODO: check for empty list; there might be no
+                // incoming event registered yet.
+                Event followingEvent = head(incomingEventForOutgoing(event));
+                Int t = eventTime(followingEvent) - eventTime(event);
+                this!processEvent(followingEvent, t);
+            }
+            _ => {
+                // "in" or "ack"
+                List<Event> resultingEvents = outgoingEventsForIncoming(event);
+                Rat meanTime = when length(resultingEvents) > 0
+                  then foldl((Event e, Int acc) => acc + eventTime(e) - eventTime(event))(resultingEvents, 0) / length(resultingEvents)
+                  else 0;
+                Maybe<Component> cl = lookup(components, Pair(eventLocalComponent(event), eventLocalId(event)));
+                foreach (e in resultingEvents) {
+                    if (isJust(cl)) { // should always be true
+                        // TODO: Consume cost here instead of delaying at
+                        // the start of resulting processEvent calls
+                    }
+                    Int t = eventTime(e) - eventTime(event);
+                    // Once we use costs, set second parameter to 0
+                    this!processEvent(e, t);
+                }
+            }
+        }
+        eventsInFlight = eventsInFlight - 1;
+    }
+}
+
+{
+    Map<Pair<String, String>, Component> components = map[];
+    foreach (node in allNodes()) {
+        Component component = null;
+        if (nodeCores(node) > 0) {
+            // TODO: calibrate cores to Speed plus calibrate execution cost
+            DeploymentComponent dc = new DeploymentComponent(`$nodeName(node)$-$nodeId(node)$`, map[Pair(Speed, nodeCores(node) * 10)]);
+            [DC: dc]component = new Component(nodeName(node), nodeId(node), nodeCores(node));
+        } else {
+            component = new Component(nodeName(node), nodeId(node), nodeCores(node));
+        }
+        components = put(components, Pair(nodeName(node), nodeId(node)), component);
+    }
+    List<Activity> activityObjects = Nil;
+    List<String> activities = activities();
+    foreach (activity_id in activities) {
+        Activity a = new Activity(activity_id, components);
+        activityObjects = Cons(a, activityObjects);
+    }
+}
+
+// Local Variables:
+// abs-target-language: java
+// End:
