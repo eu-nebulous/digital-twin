@@ -47,10 +47,11 @@ def on_connect(client, userdata, flags, reason_code, properties):
 
 def main():
     parser = argparse.ArgumentParser(
-        description='Listen on MQTT and create SQLite database with trace information')
-    parser.add_argument('dbfile', type=str,
-                        nargs='?', default='trace.db',
+        description='Listen to MQTT and create SQLite database with trace information')
+    parser.add_argument('--dbfile', type=str, default='trace.db',
                         help='The database file, will be created if necessary')
+    parser.add_argument('-p', '--mqttport', type=int, default=31084,
+                        help='The port where to contact the MQTT broker (usually 1883 or 31084)')
     args = parser.parse_args()
 
     con = sqlite3.connect(args.dbfile)
@@ -81,8 +82,9 @@ def main():
     client.on_connect = on_connect
     client.username_pw_set(username="monitor", password="vxi*RseA8gmCNdt_6pYY")
 
-    # Connect to the MQTT broker
-    client.connect("localhost", 31084, 60)
+    # Connect to the MQTT broker.  If the app runs via kubernetes, do this:
+    # kubectl -n prod port-forward service/dt-broker 31084:1883
+    client.connect("localhost", args.mqttport, 60)
 
     # Start the network loop and process messages
     client.loop_forever()
