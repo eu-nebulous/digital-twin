@@ -131,7 +131,8 @@ interface Component {
 }
 class Component(String name, String id, Int nCores) implements Component {
     Unit execute(Int cost) {
-        [Cost: cost] skip;
+        await duration(cost);
+        // [Cost: cost] skip;
     }
 }
 
@@ -147,41 +148,46 @@ class Activity(String activityId, Map<Pair<String, String>, Component> component
     Unit run() {
         List<Event> pendingEvents = startingEvents(activityId);
         foreach (event in startingEvents(activityId)) {
-            this!processEvent(event, eventTime(event) - minEventTime);
+            this!processStartingEvent(event, eventTime(event) - minEventTime);
         }
     }
 
-    Unit processEvent(Event event, Rat timeDelay) {
+    Unit processStartingEvent(Event event, Int delay) {
+        await duration(delay);
+        this!processEvent(event);
+    }
+
+    Unit processEvent(Event event) {
         eventsInFlight = eventsInFlight + 1;
-        // TODO: try to eliminate delay -- for some events, we want to
-        // replace this with
-        await duration(timeDelay);
         println(eventJsonl(event, minEventTime));
         switch (eventType(event)) {
             "out" => {
-                // should be only one event, since we don't broadcast(?)
-
-                // TODO: check for empty list; there might be no
-                // incoming event registered yet.
-                Event followingEvent = head(incomingEventForOutgoing(event));
-                Int t = eventTime(followingEvent) - eventTime(event);
-                this!processEvent(followingEvent, t);
+                List<Event> followingEvents = incomingEventForOutgoing(event);
+                if (!isEmpty(followingEvents)) {
+                    // should be only one event, since we don't
+                    // broadcast (do we?), but can be empty in case of
+                    // incomplete trace
+                    Event followingEvent = head(followingEvents);
+                    Int t = eventTime(followingEvent) - eventTime(event);
+                    await duration(t);
+                    this!processEvent(followingEvent);
+                }
             }
             _ => {
                 // "in" or "ack"
                 List<Event> resultingEvents = outgoingEventsForIncoming(event);
-                Rat meanTime = when length(resultingEvents) > 0
-                  then foldl((Event e, Int acc) => acc + eventTime(e) - eventTime(event))(resultingEvents, 0) / length(resultingEvents)
+                Rat meanTime =
+                  when length(resultingEvents) > 0
+                  then foldl((Event e, Int acc) => acc + eventTime(e) - eventTime(event))(resultingEvents, 0)
+                    / length(resultingEvents)
                   else 0;
                 Maybe<Component> cl = lookup(components, Pair(eventLocalComponent(event), eventLocalId(event)));
                 foreach (e in resultingEvents) {
-                    if (isJust(cl)) { // should always be true
-                        // TODO: Consume cost here instead of delaying at
-                        // the start of resulting processEvent calls
-                    }
                     Int t = eventTime(e) - eventTime(event);
-                    // Once we use costs, set second parameter to 0
-                    this!processEvent(e, t);
+                    if (isJust(cl)) { // should always be true
+                        await fromJust(cl)!execute(t);
+                    }
+                    this!processEvent(e);
                 }
             }
         }
