@@ -131,8 +131,7 @@ interface Component {
 }
 class Component(String name, String id, Int nCores) implements Component {
     Unit execute(Int cost) {
-        await duration(cost);
-        // [Cost: cost] skip;
+        [Cost: cost] skip;
     }
 }
 
@@ -204,7 +203,7 @@ class Activity(String activityId, Map<Pair<String, String>, Component> component
             DeploymentComponent dc = new DeploymentComponent(`$nodeName(node)$-$nodeId(node)$`, map[Pair(Speed, nodeCores(node) * 10)]);
             [DC: dc]component = new Component(nodeName(node), nodeId(node), nodeCores(node));
         } else {
-            DeploymentComponent dc = new DeploymentComponent(`$nodeName(node)$-$nodeId(node)$`, map[]);
+            DeploymentComponent dc = new DeploymentComponent(`$nodeName(node)$-$nodeId(node)$`, map[Pair(Speed, 1)]);
             [DC: dc]component = new Component(nodeName(node), nodeId(node), nodeCores(node));
         }
         components = put(components, Pair(nodeName(node), nodeId(node)), component);
@@ -219,5 +218,5 @@ class Activity(String activityId, Map<Pair<String, String>, Component> component
 
 // Local Variables:
 // abs-target-language: java
-// abs-java-output-jar-file: "twin.jar"
+// abs-java-output-jar-file: "twin-cost-2.jar"
 // End:
