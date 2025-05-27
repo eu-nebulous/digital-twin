@@ -1,0 +1,58 @@
+name: firecoat
+services:
+    firecoat-postgis:
+        environment:
+            - POSTGRES_PASSWORD=nbls
+            - POSTGRES_USER=firecoat
+        ports:
+            - 5432:5432
+        restart: unless-stopped
+        image: postgis/postgis
+        healthcheck:
+            test: ["CMD-SHELL", "pg_isready -U firecoat"]
+            interval: 10s
+            retries: 5
+            start_period: 30s
+            timeout: 10s
+    firecoat-mqtt:
+        ports:
+            - 1883:1883
+        configs:
+          - source: mosquitto_config
+            target: /mosquitto/config/mosquitto.conf
+        restart: unless-stopped
+        image: eclipse-mosquitto:latest
+    firecoat-persist:
+        environment:
+            - DB_HOST=firecoat-postgis
+            - DB_USER=firecoat
+            - DB_PASSWORD=nbls
+            - DB_DATABASE=firecoat
+            - DB_PORT=5432
+            - MQTT_HOST=firecoat-mqtt
+            - MQTT_PORT=1883
+        restart: unless-stopped
+        image: reg.biba.uni-bremen.de/nebulous/persist-dt:latest
+        depends_on:
+            firecoat-postgis:
+                condition: service_healthy
+            firecoat-mqtt:
+                condition: service_started
+        pull_policy: always
+        deploy:
+            replicas: 7
+        logging:
+            driver: json-file
+    fluentd:
+        image: fluent/fluentd:v1.16.9-1.0
+        container_name: fluentd
+        user: root
+        volumes:
+        - ./fluent.conf:/fluentd/etc/fluent.conf:ro
+        - ./logs:/fluentd/logs
+        - /var/lib/docker/containers:/var/lib/docker/containers:ro
+        - /var/run/docker.sock:/var/run/docker.sock
+    
+configs:
+  mosquitto_config:
+    file: ./mosquitto.conf
