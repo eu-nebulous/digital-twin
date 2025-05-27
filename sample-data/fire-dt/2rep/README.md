@@ -1,4 +1,4 @@
-# fireCOAT DT Demo Application
+# fireCOAT DT Demo Application Traces
 
 ## Deployment
 - local deployment via docker compose
